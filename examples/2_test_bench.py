@@ -45,8 +45,6 @@ print(merged_df.head())
 tasks = ["chembl2k", "broad6k", "toxcast", "biogen3k"]
 models = ["RF", "MLP", "GP"]
 
-bench = MolBench()
-
 # Create output directory if it doesn't exist
 os.makedirs("output", exist_ok=True)
 
@@ -55,8 +53,9 @@ for task in tasks:
     print(f"\n{'='*50}")
     print(f"Processing task: {task}")
     print(f"{'='*50}")
-    
+        
     # Load task data
+    bench = MolBench()
     bench.load_task_data(task)
     print(f'Loaded task data: {bench.task_df.shape}')
     
@@ -71,12 +70,13 @@ for task in tasks:
         print(f"{'-'*30}")
         
         # Train models
-        feature_models, fingerprint_models = bench.train_predictor(model_type=model_type, verbose=True)
+        feature_models, fingerprint_models = bench.train_predictor(model_type=model_type, verbose=False)
         
         # Evaluate models
-        results, predictions = bench.evaluate(feature_models, fingerprint_models, verbose=True, return_predictions=True)
+        results, predictions = bench.evaluate(feature_models, fingerprint_models, verbose=False, return_predictions=True)
         print(f"Results for {task} using {model_type}:")
         print(results)
+        print('task: ', task, 'model: ', model_type, 'valid avg: ', results['valid']['average'], 'test avg: ', results['test']['average'])
         
         # Save results
         bench.save_results(f'output', results, model_type=model_type)

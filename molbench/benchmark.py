@@ -81,12 +81,9 @@ class MolBench:
         
         # Get task configuration
         config = self.task_configs[task_name]
-        self.task_name = task_name
         start_col = config['start_column']
         num_tasks = config['num_tasks']
         task_type = config['task_type']
-        self.task_type = task_type
-        self.task_columns = data.columns[start_col:start_col+num_tasks]
         
         # Validate that we have enough columns
         if len(data.columns) < start_col + num_tasks:
@@ -94,8 +91,18 @@ class MolBench:
 
         data = append_scaffold_split_column(data)
         data = ensure_inchikey_column(data, 'smiles')
+        
+        self.task_name = task_name
+        self.task_type = task_type
+        self.task_columns = data.columns[start_col:start_col+num_tasks]
         self.task_df = data
         self.num_tasks = num_tasks
+
+        self.feature_cols = None
+        self.task_merged_df = None
+        self.need_fingerprint_model = None
+        self.evaluation_results = None
+        self.model_type = None
 
         return self.task_df
     
@@ -242,7 +249,7 @@ class MolBench:
             elif model_type == 'GP':
                 if self.task_type == 'classification':
                     from sklearn.gaussian_process import GaussianProcessClassifier
-                    base_predictor = lambda: GaussianProcessClassifier(random_state=42, verbose=0)
+                    base_predictor = lambda: GaussianProcessClassifier(random_state=42)
                 elif self.task_type == 'regression':
                     from sklearn.gaussian_process import GaussianProcessRegressor
                     base_predictor = lambda: GaussianProcessRegressor(random_state=42)

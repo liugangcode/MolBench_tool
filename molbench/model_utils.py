@@ -37,13 +37,9 @@ class MLPPredictor:
             device: Device to run the model on ('cuda' or 'cpu')
             task_type: Type of task ('classification' or 'regression')
         """
-        # device = 'cuda:0' 
-        # # Better device detection logic with warning handling
         if device is None:
             device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         self.device = device
-        print('device:', device)
-        # raise ValueError('device:', device)
         self.model = MLP(
             in_features=in_features,
             hidden_features=hidden_features,

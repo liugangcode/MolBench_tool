@@ -10,5 +10,5 @@ mkdir -p logs
 nohup python 2_test_bench.py > "$LOG_FILE" 2>&1 &
 
 # Print the process ID
-# 24842
+# 1378
 echo "Training started with PID: $!"
