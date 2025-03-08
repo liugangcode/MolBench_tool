@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "molbench"
+version = "0.0.1"
+description = "A benchmark tool for molecular representations"
+authors = [{name = "Gang Liu", email = "gliu7@nd.edu"}]
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy==1.26.4",
+    "pandas>=2.2.3",
+    "pyarrow",
+    "rdkit",
+    "pyyaml",
+    "ipykernel",
+    "packaging",
+    "gdown",
+    "pandarallel",
+    "matplotlib",
+    "gradio",
+    "scikit-learn",
+    "scipy",
+    "torch==2.1.0+cu118",
+]
+
+[project.scripts]
+
+[project.urls]
+"Homepage" = "https://github.com/liugangcode/MolBench_tool"
+"Bug Tracker" = "https://github.com/liugangcode/MolBench_tool"
+
+[tool.setuptools.packages.find]
+include = ["molbench*"]
+
+[tool.setuptools.package-data]
+"molbench" = ["**/*.yaml", "**/*.json"]
+
+[tool.setuptools]
+zip-safe = false
+
+[tool.pytest.ini_options]
+addopts = "--verbose"
+testpaths = ["tests"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black",
+    "isort",
+    "flake8",
+]
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[tool.isort]
+profile = "black"
+line_length = 100
