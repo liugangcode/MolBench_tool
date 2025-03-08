@@ -16,8 +16,8 @@ class MLPPredictor:
         bias=True,
         drop=0.5,
         lr=0.001,
-        epochs=100,
-        batch_size=32,
+        epochs=300,
+        batch_size=128,
         device=None,
         task_type='classification'
     ):

@@ -160,3 +160,6 @@ cython_debug/
 #.idea/
 
 private
+examples/data
+examples/cache
+examples/output
