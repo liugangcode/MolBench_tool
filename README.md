@@ -9,7 +9,7 @@ MolBench is a toolkit for evaluating and benchmarking molecular representations 
 - **Biogen3k**: Multi-task regression dataset with 6 ADME property prediction tasks
 - **ToxCast**: Large-scale multi-task classification dataset with 617 toxicity prediction tasks
 
-## Supported Models
+## Supported Classifier
 
 The toolkit currently supports the following machine learning models:
 

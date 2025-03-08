@@ -6,8 +6,8 @@ import os
 # Set up cache directory
 cache_dir = os.path.join(os.path.dirname(__file__), "cache")
 os.makedirs(cache_dir, exist_ok=True)
-profiles_path = "profiles_wellpos_cc_var_mad_outlier_featselect_sphering_harmony.parquet"
-compound_path = "compound.csv.gz"
+profiles_path = "data/profiles_wellpos_cc_var_mad_outlier_featselect_sphering_harmony.parquet"
+compound_path = "data/compound.csv.gz"
 cache_file = os.path.join(cache_dir, f"merged_data.parquet")
 if os.path.exists(cache_file):
     merged_df = pd.read_parquet(cache_file)
