@@ -448,8 +448,6 @@ class MolBench:
                                 fp_predictions = model.predict_proba(fingerprints[nan_mask])[:, 1]
                         else:
                             if isinstance(model, MLPPredictor):
-                                print('fingerprints[nan_mask]', fingerprints[nan_mask].shape)
-                                print('in regression')
                                 fp_predictions = model.predict(fingerprints[nan_mask])[:, task_idx]
                             else:
                                 fp_predictions = model.predict(fingerprints[nan_mask])
