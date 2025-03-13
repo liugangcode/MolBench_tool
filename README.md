@@ -1,6 +1,6 @@
 # MolBench: A Molecular Representation Benchmarking Toolkit
 
-MolBench is a toolkit for evaluating and benchmarking molecular representations across multiple chemical prediction tasks.
+MolBench is a toolkit for evaluating molecular representations (e.g., cell morphology features) across multiple chemical prediction tasks [from InfoAlign](https://openreview.net/forum?id=BbZy8nI1si).
 
 ## Supported Datasets
 
@@ -16,3 +16,6 @@ The toolkit currently supports the following machine learning models:
 - Random Forest (RF) - Implemented using scikit-learn
 - Gaussian Process (GP) - Implemented using scikit-learn  
 - Multi-Layer Perceptron (MLP) - Implemented using PyTorch
+
+## Usage
+An example use case can be found in the `examples` directory, using `run.sh` or `2_test_bench.py`. One may download the cell morphology features using `1_download_feature.py`.
