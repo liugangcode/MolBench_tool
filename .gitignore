@@ -165,3 +165,4 @@ examples/cache
 examples/output
 examples/logs
 examples/raw_data
+!examples/output/summary.csv

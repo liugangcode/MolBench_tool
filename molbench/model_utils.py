@@ -17,7 +17,7 @@ class MLPPredictor:
         drop=0.5,
         lr=0.001,
         epochs=300,
-        batch_size=128,
+        batch_size=512,
         device=None,
         task_type='classification'
     ):

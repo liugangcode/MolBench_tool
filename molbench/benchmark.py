@@ -9,10 +9,13 @@ import gzip
 import shutil
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import torch
 from .data_utils import ensure_inchikey_column
 from .split_utils import append_scaffold_split_column
 from .feature_utils import get_fingerprint_features
 from .metric_utils import compute_metric
+from warnings import warn
+from .model_utils import MLPPredictor
 
 class MolBench:
     def __init__(self):
@@ -206,12 +209,12 @@ class MolBench:
         self.train_eval_features = train_eval_features
         self.valid_eval_features = valid_eval_features
         self.test_eval_features = test_eval_features
-        need_fingerprint_model = np.isnan(valid_eval_features).any() or np.isnan(test_eval_features).any()
+        # need_fingerprint_model = np.isnan(valid_eval_features).any() or np.isnan(test_eval_features).any()
+        need_fingerprint_model = True
         self.need_fingerprint_model = need_fingerprint_model
 
         # Handle MLP separately as it can be multitask
         if model_type == 'MLP':
-            from .model_utils import MLPPredictor
             if verbose:
                 print("Training MLP model for multitask learning")
             
@@ -220,8 +223,7 @@ class MolBench:
             self.mlp_model.fit(train_eval_features, train_labels, verbose=verbose)                
             for task_col in self.task_columns:
                 self.eval_feature_models[task_col] = self.mlp_model
-                        
-            
+
             if need_fingerprint_model:
                 if verbose:
                     print("Training auxiliary fingerprint-based MLP model")
@@ -276,13 +278,17 @@ class MolBench:
                 eval_features_mask = ~np.isnan(train_eval_features).any(axis=1)
                 combined_mask = train_task_mask & pd.Series(eval_features_mask, index=train_df.index)
                 
-                if combined_mask.sum() > 0:
-                    model = base_predictor()
-                    model.fit(
-                        train_eval_features[combined_mask.values], 
-                        train_df.loc[combined_mask, task_col].values
-                    )
-                    self.eval_feature_models[task_col] = model
+                if len(set(train_df.loc[combined_mask, task_col].values)) > 1:
+                    if combined_mask.sum() > 0:
+                        model = base_predictor()
+                        model.fit(
+                            train_eval_features[combined_mask.values], 
+                            train_df.loc[combined_mask, task_col].values
+                        )
+                        self.eval_feature_models[task_col] = model
+                else:
+                    if verbose:
+                        print(f"  Skipping task {task_col} for the representation: All labels are the same")
                 
                 # Train fingerprint model if needed
                 if self.need_fingerprint_model and task_col not in self.fingerprint_models:
@@ -327,10 +333,7 @@ class MolBench:
         Returns:
             dict: Dictionary containing evaluation metrics for each split and task.
             dict (optional): Dictionary of prediction dataframes for each split.
-        """
-        import numpy as np
-        from tqdm import tqdm
-        
+        """        
         # Use class models if not provided
         eval_feature_models = eval_feature_models or self.eval_feature_models
         fingerprint_models = fingerprint_models or self.fingerprint_models
@@ -341,6 +344,10 @@ class MolBench:
         
         if not eval_feature_models and not fingerprint_models:
             raise ValueError("No models available for evaluation. Train models first.")
+        
+        if isinstance(eval_feature_models, str):
+            assert eval_feature_models == 'baseline'
+            print('Evaluating on fingerprint model')
         
         # Initialize results dictionary
         results = {split: {} for split in splits}
@@ -360,13 +367,23 @@ class MolBench:
                 print(f"Warning: No data found for split '{split}'")
                 continue
             
-            # Create prediction dataframe with SMILES column
+            # Create prediction dataframe with SMILES column and pre-allocate prediction columns
             pred_df = pd.DataFrame({'smiles': split_df['smiles']})
             
-            # Add ground truth columns with 'true_' prefix if return_predictions is True
+            # Pre-allocate all prediction columns at once
+            pred_columns = {}
             if return_predictions:
+                # Add ground truth columns
                 for task_col in self.task_columns:
-                    pred_df[f'true_{task_col}'] = split_df[task_col]
+                    pred_columns[f'true_{task_col}'] = split_df[task_col]
+                    pred_columns[f'pred_{task_col}'] = np.nan
+            else:
+                # Only prediction columns
+                for task_col in self.task_columns:
+                    pred_columns[f'pred_{task_col}'] = np.nan
+                    
+            # Add all columns at once
+            pred_df = pd.concat([pred_df, pd.DataFrame(pred_columns, index=pred_df.index)], axis=1)
             
             eval_features = split_df[self.feature_cols].values if self.feature_cols else None
             if hasattr(self, f'{split}_mol_fps'):
@@ -386,7 +403,7 @@ class MolBench:
             # Evaluate each task
             task_iterator = tqdm(self.task_columns, desc=f"Evaluating tasks") if verbose else self.task_columns
             
-            for task_col in task_iterator:
+            for task_idx, task_col in enumerate(task_iterator):
                 task_mask = ~split_df[task_col].isna()
                 if task_mask.sum() == 0:
                     if verbose:
@@ -398,32 +415,56 @@ class MolBench:
                 y_true = split_df.loc[task_mask, task_col].values                
                 y_pred = np.full(len(split_df), np.nan)
                 
-                if task_col in eval_feature_models and eval_features is not None:
-                    model = eval_feature_models[task_col]                    
-                    eval_features_mask = ~np.isnan(eval_features).any(axis=1)
-                    
-                    if eval_features_mask.any():
-                        if self.task_type == 'classification':
-                            eval_predictions = model.predict_proba(eval_features[eval_features_mask])[:, 1]
-                        else:
-                            eval_predictions = model.predict(eval_features[eval_features_mask])
-                        y_pred[eval_features_mask] = eval_predictions
+                if eval_feature_models != 'baseline':
+                    if task_col in eval_feature_models and eval_features is not None:
+                        model = eval_feature_models[task_col]                    
+                        eval_features_mask = ~np.isnan(eval_features).any(axis=1)
+                        
+                        if eval_features_mask.any():
+                            if self.task_type == 'classification':
+                                if isinstance(model, MLPPredictor):
+                                    eval_predictions = model.predict_proba(eval_features[eval_features_mask])[:, task_idx]
+                                else:
+                                    outputs = model.predict_proba(eval_features[eval_features_mask])
+                                    if outputs.shape[1] == 1:
+                                        warn(f"Skip evaluating the representation for classification task {task_col}: Single output")
+                                    else:
+                                        eval_predictions = outputs[:, 1]
+                            else:
+                                if isinstance(model, MLPPredictor):
+                                    eval_predictions = model.predict(eval_features[eval_features_mask])[:, task_idx]
+                                else:
+                                    eval_predictions = model.predict(eval_features[eval_features_mask])
+                            y_pred[eval_features_mask] = eval_predictions
 
-                
                 if task_col in fingerprint_models and fingerprints is not None:
                     model = fingerprint_models[task_col]
                     nan_mask = np.isnan(y_pred)
                     if nan_mask.any():
                         if self.task_type == 'classification':
-                            fp_predictions = model.predict_proba(fingerprints[nan_mask])[:, 1]
+                            if isinstance(model, MLPPredictor):
+                                fp_predictions = model.predict_proba(fingerprints[nan_mask])[:, task_idx]
+                            else:
+                                fp_predictions = model.predict_proba(fingerprints[nan_mask])[:, 1]
                         else:
-                            fp_predictions = model.predict(fingerprints[nan_mask])
+                            if isinstance(model, MLPPredictor):
+                                print('fingerprints[nan_mask]', fingerprints[nan_mask].shape)
+                                print('in regression')
+                                fp_predictions = model.predict(fingerprints[nan_mask])[:, task_idx]
+                            else:
+                                fp_predictions = model.predict(fingerprints[nan_mask])
+                        # print('fp_predictions', fp_predictions.shape, 'y_pred', y_pred.shape, 'nan_mask', nan_mask.shape)
                         y_pred[nan_mask] = fp_predictions
                 
-                # Add predictions to dataframe
-                pred_df[f"pred_{task_col}"] = y_pred
+                # Update prediction column (now pre-allocated)
+                pred_df.loc[:, f"pred_{task_col}"] = y_pred
                 
                 # Compute metrics
+                if np.isnan(y_pred).any():
+                    print('task_col in fingerprint_models', task_col in fingerprint_models)
+                    print('fingerprints is not None', fingerprints is not None)
+                    raise ValueError(f"y_pred contains NaN for task {task_col}", 'y_pred', y_pred, 'y_true', split_df.loc[task_mask, task_col].values)
+                
                 metric_value = compute_metric(
                     y_true=split_df.loc[task_mask, task_col].values,
                     y_pred=y_pred[task_mask],
@@ -449,14 +490,25 @@ class MolBench:
                         metric_name = 'AUC' if self.task_type == 'classification' else 'MAE'
                         print(f"\n{split.capitalize()} set average {metric_name}: {avg_metric:.4f}")
                         print(f"Tasks evaluated: {len(valid_metrics)}/{len(self.task_columns)}")
-        
-        self.evaluation_results = results
-        self.prediction_dfs = predictions
-        
+
+        results_df = []
+        for task in results['valid'].keys():
+            if task != 'average':
+                results_df.append({
+                    'task': task,
+                    'valid': results['valid'][task],
+                    'test': results['test'][task]
+                })
+                
+        results_df = pd.DataFrame(results_df)
+        if eval_feature_models != 'baseline':
+            self.evaluation_results = results_df
+            self.prediction_dfs = predictions
+
         if return_predictions:
-            return results, predictions
+            return results_df, predictions
         else:
-            return results
+            return results_df
 
     def save_results(self, output_dir='output', results=None, model_type=None):
         if model_type is None:
@@ -468,19 +520,19 @@ class MolBench:
         if results is None:
             results = self.evaluation_results
             
-        # Create list of task results
-        task_results = []
-        for task in results['valid'].keys():
-            if task != 'average':
-                task_results.append({
-                    'task': task,
-                    'valid': results['valid'][task],
-                    'test': results['test'][task]
-                })
-                
-        results_df = pd.DataFrame(task_results)
+        # # Create list of task results
+        # task_results = []
+        # for task in results['valid'].keys():
+        #     if task != 'average':
+        #         task_results.append({
+        #             'task': task,
+        #             'valid': results['valid'][task],
+        #             'test': results['test'][task]
+        #         })
+        # results_df = pd.DataFrame(task_results)
+        
         output_results_path = os.path.join(output_dir, f"{self.task_name}_{model_type}_{self.task_type}_eval.csv")
-        results_df.to_csv(output_results_path, index=False)
+        results.to_csv(output_results_path, index=False)
 
         print(f"Results saved to {output_results_path}")
         if self.prediction_dfs is not None:
@@ -530,7 +582,12 @@ class MolBench:
         results = results or self.evaluation_results
         if results is None:
             raise ValueError("No evaluation results available. Run evaluate() first.")
-        
+        if isinstance(results, pd.DataFrame):
+            results = {
+                "valid": dict(zip(results["task"], results["valid"])),
+                "test": dict(zip(results["task"], results["test"]))
+            }
+
         os.makedirs(output_dir, exist_ok=True)
         if self.task_type is None:
             raise ValueError("Task type is not set. Run load_results() first.")
@@ -561,18 +618,20 @@ class MolBench:
             ax = df.plot(kind='bar', ax=axes[i], color='skyblue')
             
             # Use task names from the task column if available
-            if isinstance(self.evaluation_results, pd.DataFrame) and 'task' in self.evaluation_results.columns:
+            if (isinstance(self.evaluation_results, pd.DataFrame) 
+                and 'task' in self.evaluation_results.columns 
+                and self.task_name not in ['toxcast']):
                 task_mapping = dict(zip(self.evaluation_results.index, self.evaluation_results['task']))
                 task_names = [task_mapping.get(idx, idx) for idx in df.index]
                 ax.set_xticklabels(task_names, rotation=90, ha='center')
             else:
-                # Fallback to using index as before
                 task_names = df.index
                 ax.set_xticklabels(task_names, rotation=90, ha='center')
             
-            # Add average line if available
-            if 'average' in results[split]:
-                avg = results[split]['average']
+            split_values = [v for k, v in results[split].items() 
+                          if k != 'average' and not (isinstance(v, float) and np.isnan(v))]
+            avg = np.mean(split_values) if split_values else None
+            if avg is not None:
                 axes[i].axhline(y=avg, color='r', linestyle='-', label=f'Avg: {avg:.3f}')
                 axes[i].legend()
             
@@ -591,21 +650,111 @@ class MolBench:
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
         return output_path
-    
-# Sample test
-if __name__ == "__main__":
-    # Generate sample data
-    np.random.seed(42)
-    sample_data = pd.DataFrame({
-        'feature1': np.random.rand(100),
-        'feature2': np.random.rand(100),
-        'label': np.random.choice([0, 1], size=100)
-    })
-    
-    model = MolBench()
-    X, y = model.match_labels(sample_data, 'label')
-    model.split_data(X, y)
-    model.train_classifier()
-    accuracy, report = model.evaluate()
-    print(f"Accuracy: {accuracy}\n")
-    print(f"Classification Report:\n{report}")
+
+    # def plot_comparison_bar(self, baseline, target=None, baseline_name='baseline', target_name=None, output_dir='output'):
+    #     """Plot comparison bar charts between baseline and target results.
+        
+    #     Args:
+    #         baseline (pd.DataFrame): Baseline results DataFrame with columns ['task', 'valid', 'test']
+    #         target (pd.DataFrame, optional): Target results DataFrame. If None, uses self.evaluation_results
+    #         baseline_name (str): Name for the baseline model (default: 'baseline')
+    #         target_name (str, optional): Name for the target model. If None, uses 'evaluated'
+    #         output_dir (str): Directory to save the output plot (default: 'output')
+            
+    #     Returns:
+    #         str: Path to the saved plot
+    #     """
+    #     if target is None:
+    #         if self.evaluation_results is None:
+    #             raise ValueError("No evaluation results available. Run evaluate() first or provide target results.")
+    #         target = self.evaluation_results
+        
+    #     if target_name is None:
+    #         target_name = 'evaluated'
+        
+    #     if not all(col in baseline.columns for col in ['task', 'valid', 'test']):
+    #         raise ValueError("Baseline DataFrame must contain 'task', 'valid', and 'test' columns")
+        
+    #     # Ensure tasks match between baseline and target
+    #     baseline_tasks = set(baseline['task'])
+    #     target_tasks = set(target['task'])
+    #     common_tasks = baseline_tasks.intersection(target_tasks)
+        
+    #     if len(common_tasks) == 0:
+    #         raise ValueError("No common tasks found between baseline and target results")
+        
+    #     # Filter to common tasks and sort
+    #     baseline = baseline[baseline['task'].isin(common_tasks)].sort_values('task')
+    #     target = target[target['task'].isin(common_tasks)].sort_values('task')
+        
+    #     # Create figure with two subplots
+    #     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+        
+    #     metric_name = 'AUC' if self.task_type == 'classification' else 'MAE'
+    #     bar_width = 0.35
+        
+    #     # Process each split
+    #     for i, split in enumerate(['valid', 'test']):
+    #         tasks = baseline['task']
+    #         x = np.arange(len(tasks))
+            
+    #         baseline_values = baseline[split]
+    #         target_values = target[split]
+            
+    #         # Calculate differences
+    #         differences = target_values - baseline_values
+            
+    #         # Plot bars
+    #         axes[i].bar(x - bar_width/2, baseline_values, bar_width, label=baseline_name, color='lightblue')
+    #         axes[i].bar(x + bar_width/2, target_values, bar_width, label=target_name, color='lightgreen')
+            
+    #         # Plot differences as red/green bars on top
+    #         for j, diff in enumerate(differences):
+    #             color = 'green' if diff > 0 else 'red'
+    #             if diff > 0:
+    #                 axes[i].arrow(x[j], baseline_values.iloc[j], 0, diff, 
+    #                             color=color, alpha=0.5, width=0.03,
+    #                             head_width=0.1, head_length=min(abs(diff)*0.2, abs(diff)))
+    #             else:
+    #                 axes[i].arrow(x[j], target_values.iloc[j], 0, -diff, 
+    #                             color=color, alpha=0.5, width=0.03,
+    #                             head_width=0.1, head_length=min(abs(diff)*0.2, abs(diff)))
+            
+    #         # Calculate and plot averages
+    #         baseline_avg = baseline_values.mean()
+    #         target_avg = target_values.mean()
+    #         axes[i].axhline(y=baseline_avg, color='blue', linestyle='--', 
+    #                        label=f'{baseline_name} Avg: {baseline_avg:.3f}')
+    #         axes[i].axhline(y=target_avg, color='green', linestyle='--',
+    #                        label=f'{target_name} Avg: {target_avg:.3f}')
+            
+    #         # Customize plot
+    #         axes[i].set_title(f"{split.capitalize()} Set")
+    #         axes[i].set_ylabel(metric_name)
+    #         axes[i].set_xlabel("Tasks")
+    #         axes[i].set_xticks(x)
+    #         axes[i].set_xticklabels(tasks, rotation=90, ha='center')
+    #         axes[i].legend()
+            
+    #         # Add difference annotations
+    #         for j, diff in enumerate(differences):
+    #             if abs(diff) > 0.01:  # Only show significant differences
+    #                 axes[i].annotate(f'{diff:+.2f}', 
+    #                                xy=(x[j], max(baseline_values.iloc[j], target_values.iloc[j])),
+    #                                xytext=(0, 5), textcoords='offset points',
+    #                                ha='center', va='bottom',
+    #                                color='green' if diff > 0 else 'red',
+    #                                fontsize=8)
+        
+    #     # Add overall title and adjust layout
+    #     plt.suptitle(f"{self.task_name} - {self.task_type.capitalize()}: {baseline_name} vs {target_name}")
+    #     plt.tight_layout()
+        
+    #     # Save plot
+    #     os.makedirs(output_dir, exist_ok=True)
+    #     output_path = os.path.join(output_dir, 
+    #                               f"{self.task_name}_{baseline_name}_vs_{target_name}_comparison.png")
+    #     plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    #     plt.close()
+        
+    #     return output_path
